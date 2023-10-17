@@ -4,8 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"io"
-	"log"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/reiver/go-telnet"
 	"github.com/tarm/serial"
 )
 
@@ -30,23 +28,20 @@ var FALSE = false
 
 func main() {
 	timeout := 5 * time.Second
-	connStrLocal := "user=postgres password=alxius dbname=recordings host=localhost port=5432 sslmode=disable"
-	args := os.Args
+	connStrLocal := "user=postgres password=alxius dbname=recordings host=localhost port=5433 sslmode=disable"
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	role := args[2]
-
-	portCheck("127.0.0.1:5432", timeout)
+	portCheck("gpnode2.cchosting.my.id:25569", timeout)
 	dbType(connStrLocal, "postgres", &wg)
 
 	wg.Add(1)
 	go dbCheck(connStrLocal, "postgres", &wg)
-	if role == "a" {
+	if DB_LOCAL == "master" {
 		wg.Add(1)
 		go serialMaster("/dev/pts/9", timeout, &wg, &mu)
-	} else {
+	} else if DB_LOCAL == "replica" {
 		wg.Add(2)
 		go serialStandby("/dev/pts/10", timeout, &wg, &mu)
 		go waitFlag(&wg, &mu)
@@ -356,7 +351,7 @@ func dbCheck(connStr string, driverDB string, wg *sync.WaitGroup) {
 			} else {
 				RetryDB = 0
 				FLAG_DB = &TRUE
-				fmt.Println(currentTime() + fmt.Sprint(res) + " " + fmt.Sprint(*FLAG_DB))
+				fmt.Println(currentTime() + "dbCheck " + fmt.Sprint(*FLAG_DB))
 			}
 		}
 		conn.Close()
@@ -372,16 +367,8 @@ func dbCheck(connStr string, driverDB string, wg *sync.WaitGroup) {
 
 // portCheck digunakan oleh standby untuk mengecek bila port yang akan digunakan remote db apakah menerima koneksi atau tidak
 func portCheck(address string, timeout time.Duration) {
-	// _, err := net.DialTimeout("tcp", address, timeout)
-	// if err != nil {
-	// 	fmt.Println("Error connecting to remote port: ", err)
-	// 	fmt.Printf("Address %s cannot be connected\n", address)
-	// } else {
-	// 	fmt.Printf("Address %s can connected\n", address)
 
-	// }
-
-	conn, err := telnet.DialTo(address)
+	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		fmt.Println(currentTime()+"Error dialing: ", err)
 		return
@@ -408,38 +395,38 @@ func restartPostgres() {
 	return
 }
 
-func execCommand(command string, port string) (output string) {
-	cmd := exec.Command(command, "-p", port)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Start the command.
-	if err := cmd.Start(); err != nil {
-		log.Fatal(err)
-	}
-
-	// Read and print the output.
-	outputBytes, err := io.ReadAll(stdout)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	outputString := string(outputBytes)
-
-	if err := cmd.Wait(); err != nil {
-		log.Fatal(err)
-	}
-	return outputString
-
-}
-
 func currentTime() string {
 	current := time.Now().Format("15:04:05.000000|")
 	return current
 
 }
+
+// func execCommand(command string, port string) (output string) {
+// 	cmd := exec.Command(command, "-p", port)
+// 	stdout, err := cmd.StdoutPipe()
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	// Start the command.
+// 	if err := cmd.Start(); err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	// Read and print the output.
+// 	outputBytes, err := io.ReadAll(stdout)
+// 	if err != nil {
+// 		log.Fatal(err)
+// 	}
+
+// 	outputString := string(outputBytes)
+
+// 	if err := cmd.Wait(); err != nil {
+// 		log.Fatal(err)
+// 	}
+// 	return outputString
+
+// }
 
 // For checking db connection with TCP
 // dbAddr := "localhost"
