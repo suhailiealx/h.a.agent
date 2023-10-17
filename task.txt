@@ -1,0 +1,23 @@
+Task - 11 Oktober 2023
+
+REPLICATION - PHYSICAL
+1. ICMP Ping -> pakai equRPC
+2. DB Ping -> melakukan probing terhadap port pada instance db
+    - Melakukan pg_isready untuk mengecek status dari port apakah dapat instance/db menerima koneksi atau tidak
+    - Jika dapat menerima, lakukan query untuk memastikan databasenya masih up (dengan SELECT 1 setiap beberapa waktu (30s atau 1 mnt)) , bikin goroutine untuk tahap ini
+    - Jika ada hasil, maka kirimkan flag true atau false
+
+3. Serial Ping -> melakukan ping antara kedua hardware/device dari standby ke master, berupa File/FileHandler
+    - Master akan selalu melakukan read-blocking untuk menunggu request dari client
+    - Client akan mengirimkan sebuah request ke master, master akan menerima dan mengirimkan ack balik ke klien
+    - Klien kemudian menerima ack dan menandakan bahwa master masih up
+
+Senin, 16 Oktober 2023
+A. Pada master, terdapat:
+- dbcheck untuk mengecek db lokal apakah berjalan atau tidak. Jika tidak, maka akan dilakukan restart service sekali, dan jika masih tidak bisa maka akan kill service.
+- serial ping, yang menunggu request/write dari standby dan mengirimkan kembali ack jika menerimanya
+
+B. Pada standby, terdapat:
+- dbcheck, dengan fungsi yang sama seperti pada master
+- serial ping, yang mengirimkan ping/req kepada master dan menunggu ack dari master. Jika tidak ada ack, maka akan dilakukan pengiriman ulang hingga beberapa (5kali), dan jika masih tidak bisa maka akan dibuat Flag false
+- port master check, yang mengecek destined port yang digunakan db master, untuk mengetahui apakah menerima connection atau tidak
