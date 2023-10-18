@@ -1,4 +1,4 @@
-module main.go
+module trygo
 
 go 1.21.1
 
