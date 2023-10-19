@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math/rand"
 	"net"
 	"os"
 	"os/exec"
@@ -11,9 +12,10 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/tarm/serial"
 )
+
+const LIMIT = 5
 
 var RetryDB int
 var RetrySerial int
@@ -25,6 +27,7 @@ var REP_STAT bool
 
 var TRUE = true
 var FALSE = false
+var randString = map[int]string{0: "Hello ping", 1: "Hello world", 2: "This is ping", 3: "Knock knock", 4: "Ping is coming"}
 
 type Controller struct {
 	Name      string
@@ -43,18 +46,25 @@ func (c *Controller) Run() {
 	connStrLocal := c.connStrDB
 	IPAddr := c.IPAddr
 
+	var role string
+	if len(os.Args) == 2 {
+		role = os.Args[1]
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+
+	rand.Seed(time.Now().UnixNano())
 
 	portCheck(IPAddr, timeout)
 	dbType(connStrLocal, "postgres", &wg)
 
 	wg.Add(1)
 	go dbCheck(connStrLocal, "postgres", &wg)
-	if DB_LOCAL == "master" {
+	if role == "a" || DB_LOCAL == "master" {
 		wg.Add(1)
-		go serialMaster("/dev/pts/10", timeout, &wg, &mu)
-	} else if DB_LOCAL == "replica" {
+		go serialMaster("/dev/pts/8", timeout, &wg, &mu)
+	} else {
 		wg.Add(2)
 		go serialStandby("/dev/pts/9", timeout, &wg, &mu)
 		go waitFlag(&wg, &mu)
@@ -62,6 +72,32 @@ func (c *Controller) Run() {
 	wg.Wait()
 
 	fmt.Println("Exiting controller...")
+}
+
+func (c *Controller) RunSerial() {
+	timeout := c.Timeout
+	connStrLocal := c.connStrDB
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	var role string
+	if len(os.Args) == 2 {
+		role = os.Args[1]
+	}
+
+	dbType(connStrLocal, "postgres", &wg)
+	rand.Seed(time.Now().UnixNano())
+
+	if role == "a" || DB_LOCAL == "master" {
+		wg.Add(1)
+		go serialMaster("/dev/pts/8", timeout, &wg, &mu)
+	} else {
+		wg.Add(1)
+		go serialStandby("/dev/pts/9", timeout, &wg, &mu)
+		//go waitFlag(&wg, &mu)
+	}
+	wg.Wait()
 }
 
 // waitFlag melakukan print status flag
@@ -113,10 +149,10 @@ func dbType(connStrLocal string, dbDriver string, wg *sync.WaitGroup) {
 	defer conn.Close()
 
 	queryRep := fmt.Sprint("SELECT usename FROM pg_stat_replication")
+
 	queryType := fmt.Sprint("SELECT pg_is_in_recovery()")
 
 	var res string
-
 	err = conn.QueryRow(queryType).Scan(&res)
 
 	//Check if it is master or replica
@@ -168,10 +204,10 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 
 	buffer := make([]byte, 100)
 	var n int
-	for RetrySerial <= 5 {
+	for RetrySerial <= LIMIT {
 		//Alur loop di standby : kirim req - nunggu ack - terima ack - kirim req.....
 
-		dataToSend := []byte("Serial ping")
+		dataToSend := []byte(randString[rand.Intn(5)])
 		//fmt.Println("standby write")
 		//Standby mengirimkan request/ping ke master
 		_, err = port.Write(dataToSend)
@@ -179,7 +215,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 			fmt.Println("-------------------------------------------")
 			fmt.Println(currentTime()+"Standby|ErrorSerial sending data: ", err)
 			RetrySerial++
-			if RetrySerial <= 5 {
+			if RetrySerial <= LIMIT {
 				fmt.Println(currentTime() + "Standby|Trying to reconnect......")
 				fmt.Printf(currentTime()+"Standby|Attempting retry %v.....\n", RetrySerial)
 				fmt.Println("-------------------------------------------")
@@ -198,7 +234,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 				fmt.Println("-------------------------------------------")
 				fmt.Println(currentTime() + "Standby|TimeoutSerial reached while waiting for response......")
 				RetrySerial++
-				if RetrySerial <= 5 {
+				if RetrySerial <= LIMIT {
 					fmt.Println(currentTime() + "Standby|Trying to resend ping....")
 					fmt.Printf(currentTime()+"Standby|Attempting retry %v.....\n", RetrySerial)
 					fmt.Println("-------------------------------------------")
@@ -210,7 +246,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 					fmt.Println("-------------------------------------------")
 					fmt.Println(currentTime()+"Standby|ErrorSerial receiving data: ", err, resp)
 					RetrySerial++
-					if RetrySerial <= 5 {
+					if RetrySerial <= LIMIT {
 						fmt.Println(currentTime() + "Standby|Trying to resend the data......")
 						fmt.Printf(currentTime()+"Standby|Attempting retry %v.....\n", RetrySerial)
 						fmt.Println("-------------------------------------------")
@@ -276,7 +312,7 @@ func serialMaster(serialName string, timeout time.Duration, wg *sync.WaitGroup, 
 
 	var n int
 	buffer := make([]byte, 100)
-	for RetrySerial <= 5 {
+	for RetrySerial <= LIMIT {
 		//Alur loop di master : nunggu req - terima req - kirim ack - nunggu req.....
 
 		//fmt.Println("master baca")
@@ -286,7 +322,7 @@ func serialMaster(serialName string, timeout time.Duration, wg *sync.WaitGroup, 
 			fmt.Println("-------------------------------------------")
 			fmt.Println(currentTime()+"Master|ErrorSerial receiving data: ", err)
 			RetrySerial++
-			if RetrySerial <= 5 {
+			if RetrySerial <= LIMIT {
 				fmt.Println(currentTime() + "Master|Waiting data....")
 				fmt.Printf(currentTime()+"Master|Attempting retry %v.....\n", RetrySerial)
 				fmt.Println("-------------------------------------------")
@@ -306,7 +342,7 @@ func serialMaster(serialName string, timeout time.Duration, wg *sync.WaitGroup, 
 				fmt.Println("-------------------------------------------")
 				fmt.Println(currentTime()+"Master|ErrorSerial sending data: ", err)
 				RetrySerial++
-				if RetrySerial <= 5 {
+				if RetrySerial <= LIMIT {
 					fmt.Println(currentTime() + "Master|Resend data....")
 					fmt.Printf(currentTime()+"Master|Attempting retry %v.....\n", RetrySerial)
 					fmt.Println("-------------------------------------------")
@@ -335,7 +371,7 @@ func dbCheck(connStr string, driverDB string, wg *sync.WaitGroup) {
 		if err != nil {
 			fmt.Println(currentTime()+"dbCheck|Error connecting to database: ", err)
 			RetryDB++
-			if RetryDB <= 5 {
+			if RetryDB <= LIMIT {
 				fmt.Println(currentTime() + "dbCheck|Restarting connection.......")
 				fmt.Printf(currentTime()+"dbCheck|Attempting retry %v..... \n", RetryDB)
 			} else if RetryDB == 6 {
@@ -348,13 +384,13 @@ func dbCheck(connStr string, driverDB string, wg *sync.WaitGroup) {
 			query := fmt.Sprint("SELECT 1")
 
 			err = conn.QueryRow(query).Scan(&res)
-			if Count > 15 {
+			if Count > 9 {
 				res = -1
 			}
 			if err != nil || res != 1 {
 				fmt.Println(currentTime()+"dbCheck|Error querying to database: ", err)
 				RetryDB++
-				if RetryDB <= 5 {
+				if RetryDB <= LIMIT {
 					fmt.Println(currentTime() + "dbCheck|Restarting connection.......")
 					fmt.Printf(currentTime()+"dbCheck|Attempting retry %v..... \n", RetryDB)
 				} else if RetryDB == 6 {

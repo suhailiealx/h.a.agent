@@ -11,7 +11,8 @@ func main() {
 	ipaddr := "localhost:5432"
 
 	c := controller.NewController("c1", connstr, timeout, ipaddr)
-	c.Run()
+	// c.Run()
+	c.RunSerial()
 }
 
 // func execCommand(command string, port string) (output string) {
