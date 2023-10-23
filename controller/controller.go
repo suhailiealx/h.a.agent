@@ -12,7 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tarm/serial"
+	_ "github.com/lib/pq"
+	"go.bug.st/serial"
 )
 
 const LIMIT = 5
@@ -30,7 +31,7 @@ var FALSE = false
 var randString = map[int]string{0: "Hello ping", 1: "Hello world", 2: "This is ping", 3: "Knock knock", 4: "Ping is coming"}
 
 type Controller struct {
-	Name      string
+	Role      string
 	connStrDB string
 	Timeout   time.Duration
 	IPAddr    string
@@ -45,29 +46,35 @@ func (c *Controller) Run() {
 	timeout := c.Timeout
 	connStrLocal := c.connStrDB
 	IPAddr := c.IPAddr
+	role := c.Role
 
-	var role string
-	if len(os.Args) == 2 {
-		role = os.Args[1]
-	}
+	// var role string
+	// if len(os.Args) == 2 {
+	// 	role = os.Args[1]
+	// }
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
 	rand.Seed(time.Now().UnixNano())
 
-	portCheck(IPAddr, timeout)
-	dbType(connStrLocal, "postgres", &wg)
+	// connMaster := "user=postgres password=postgres dbname=recordings host=localhost port=5434 sslmode=disable"
+	// connStandby := "user=postgres password=postgres dbname=recordings host=localhost port=5433 sslmode=disable"
 
-	wg.Add(1)
-	go dbCheck(connStrLocal, "postgres", &wg)
-	if role == "a" || DB_LOCAL == "master" {
-		wg.Add(1)
-		go serialMaster("/dev/pts/8", timeout, &wg, &mu)
-	} else {
+	portCheck(IPAddr, timeout)
+	fmt.Println("role: ", role)
+
+	if role == "master" {
+		dbType(connStrLocal, "postgres", &wg)
 		wg.Add(2)
-		go serialStandby("/dev/pts/9", timeout, &wg, &mu)
-		go waitFlag(&wg, &mu)
+		go dbCheck(connStrLocal, "postgres", &wg)
+		go serialMaster("/dev/pts/16", timeout, &wg, &mu)
+	} else {
+		dbType(connStrLocal, "postgres", &wg)
+		wg.Add(3)
+		go dbCheck(connStrLocal, "postgres", &wg)
+		go serialStandby("/dev/pts/17", timeout, &wg, &mu)
+		go waitFlag(connStrLocal, &wg, &mu)
 	}
 	wg.Wait()
 
@@ -76,32 +83,34 @@ func (c *Controller) Run() {
 
 func (c *Controller) RunSerial() {
 	timeout := c.Timeout
-	connStrLocal := c.connStrDB
+	//connStrLocal := c.connStrDB
+	role := c.Role
 
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
-	var role string
-	if len(os.Args) == 2 {
-		role = os.Args[1]
-	}
+	// var role string
+	// if len(os.Args) == 2 {
+	// 	role = os.Args[1]
+	// }
 
-	dbType(connStrLocal, "postgres", &wg)
+	//dbType(connStrLocal, "postgres", &wg)
 	rand.Seed(time.Now().UnixNano())
+	fmt.Println("role: ", role)
 
-	if role == "a" || DB_LOCAL == "master" {
+	if role == "master" {
 		wg.Add(1)
-		go serialMaster("/dev/pts/8", timeout, &wg, &mu)
+		go serialMaster("/dev/ttyS0", timeout, &wg, &mu)
 	} else {
 		wg.Add(1)
-		go serialStandby("/dev/pts/9", timeout, &wg, &mu)
+		go serialStandby("/dev/ttyS0", timeout, &wg, &mu)
 		//go waitFlag(&wg, &mu)
 	}
 	wg.Wait()
 }
 
 // waitFlag melakukan print status flag
-func waitFlag(wg *sync.WaitGroup, mu *sync.Mutex) {
+func waitFlag(connStrLocal string, wg *sync.WaitGroup, mu *sync.Mutex) {
 	defer wg.Done()
 	for {
 		fmt.Println("===========================================")
@@ -114,6 +123,12 @@ func waitFlag(wg *sync.WaitGroup, mu *sync.Mutex) {
 				fmt.Println(currentTime() + "Connection is stable, continue monitoring.....")
 			} else if !*FLAG_DB && !*FLAG_SERIAL {
 				fmt.Println(currentTime() + "Connection error from master, promoting.....")
+				err := promoteStandby(connStrLocal)
+				if err != nil {
+					fmt.Println("Error promoting, something wrong: ", err)
+				} else {
+					fmt.Println("Successfully promoting standby")
+				}
 				break
 			} else {
 				fmt.Println(currentTime() + "Something is wrong!!")
@@ -188,19 +203,20 @@ func dbType(connStrLocal string, dbDriver string, wg *sync.WaitGroup) {
 func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup, mu *sync.Mutex) {
 	defer wg.Done()
 
-	config := &serial.Config{
-		Name:        serialName,
-		Baud:        9600,
-		ReadTimeout: timeout,
+	config := &serial.Mode{
+		BaudRate: 9600,
 	}
 
-	port, err := serial.OpenPort(config)
+	port, err := serial.Open(serialName, config)
 	if err != nil {
 		//fmt.Println("SerialPingStandby|Error connecting serial port: ", err)
 		panic(err)
+	} else {
+		fmt.Println(currentTime()+"Serial|Connect success ", serialName)
 	}
 
 	defer port.Close()
+	fmt.Printf("port: %v\n", port)
 
 	buffer := make([]byte, 100)
 	var n int
@@ -208,7 +224,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 		//Alur loop di standby : kirim req - nunggu ack - terima ack - kirim req.....
 
 		dataToSend := []byte(randString[rand.Intn(5)])
-		//fmt.Println("standby write")
+		fmt.Println("standby write")
 		//Standby mengirimkan request/ping ke master
 		_, err = port.Write(dataToSend)
 		if err != nil {
@@ -224,7 +240,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 
 			time.Sleep(3 * time.Second)
 
-			//fmt.Println("standby baca")
+			fmt.Println("standby baca")
 
 			//Standby akan menunggu respons ack dari master dengan timeout 5 detik
 			n, err = readWithTimeout(port, buffer, timeout)
@@ -244,7 +260,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 				resp := string(buffer[:n])
 				if err != nil || !strings.Contains(resp, "ack") {
 					fmt.Println("-------------------------------------------")
-					fmt.Println(currentTime()+"Standby|ErrorSerial receiving data: ", err, resp)
+					fmt.Println(currentTime()+"Standby|ErrorSerial receiving data: ", err, resp, n)
 					RetrySerial++
 					if RetrySerial <= LIMIT {
 						fmt.Println(currentTime() + "Standby|Trying to resend the data......")
@@ -275,7 +291,7 @@ func serialStandby(serialName string, timeout time.Duration, wg *sync.WaitGroup,
 	fmt.Println("-------------------------------------------")
 }
 
-func readWithTimeout(port *serial.Port, buffer []byte, timeout time.Duration) (int, error) {
+func readWithTimeout(port serial.Port, buffer []byte, timeout time.Duration) (int, error) {
 	done := make(chan struct{})
 
 	var n int
@@ -299,23 +315,25 @@ func readWithTimeout(port *serial.Port, buffer []byte, timeout time.Duration) (i
 func serialMaster(serialName string, timeout time.Duration, wg *sync.WaitGroup, mu *sync.Mutex) {
 	defer wg.Done()
 
-	config := &serial.Config{
-		Name: serialName,
-		Baud: 9600,
+	config := &serial.Mode{
+		BaudRate: 9600,
 	}
 
-	port, err := serial.OpenPort(config)
+	port, err := serial.Open(serialName, config)
 	if err != nil {
 		fmt.Println(currentTime()+"Master|Error connecting serial port: ", err)
+	} else {
+		fmt.Println(currentTime()+"Master|Connect success ", serialName)
 	}
 	defer port.Close()
+	fmt.Printf("port: %v\n", port)
 
 	var n int
 	buffer := make([]byte, 100)
 	for RetrySerial <= LIMIT {
 		//Alur loop di master : nunggu req - terima req - kirim ack - nunggu req.....
 
-		//fmt.Println("master baca")
+		// fmt.Println("master baca")
 		//Master akan selalu menunggu request dari standby
 		n, err = port.Read(buffer)
 		if err != nil {
@@ -335,7 +353,7 @@ func serialMaster(serialName string, timeout time.Duration, wg *sync.WaitGroup, 
 			fmt.Println("-------------------------------------------")
 
 			dataToSend := []byte("ack")
-			//fmt.Println("master write")
+			// fmt.Println("master write")
 			//Master mengirimkan respon ack kepada standby sebagai tanda bahwa request telah diterima
 			n, err = port.Write(dataToSend)
 			if err != nil {
@@ -442,6 +460,24 @@ func restartPostgres() {
 
 	fmt.Println(currentTime() + "~~Successfully restarting postgresql~~")
 	return
+}
+
+func promoteStandby(connStrLocal string) error {
+	conn, err := sql.Open("postgres", connStrLocal)
+	if err != nil {
+		fmt.Println("Error connecting to db for promote: ", err)
+		return err
+	}
+
+	if DB_LOCAL == "replica" {
+		query := fmt.Sprint("SELECT pg_promote()")
+		_, err := conn.Exec(query)
+		if err != nil {
+			fmt.Println("Error executing query for promote: ", err)
+			return err
+		}
+	}
+	return nil
 }
 
 func currentTime() string {

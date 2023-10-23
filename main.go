@@ -1,18 +1,48 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io/ioutil"
+	"os"
 	"time"
 	"trygo/controller"
 )
 
 func main() {
-	connstr := "user=postgres password=alxius dbname=recordings host=localhost port=5433 sslmode=disable"
-	timeout := 5 * time.Second
-	ipaddr := "localhost:5432"
 
-	c := controller.NewController("c1", connstr, timeout, ipaddr)
-	// c.Run()
-	c.RunSerial()
+	fmt.Println("Reading configuration file: %s", os.Args[1])
+
+	jsonFile, err := os.Open("./conf/" + os.Args[1] + ".conf")
+	if err != nil {
+		fmt.Println(err, "os.Open>")
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
+
+	byteValue, err := ioutil.ReadAll(jsonFile)
+	if err != nil {
+		fmt.Println(err, "Failed to read config: (%s)")
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
+
+	var jsonconf map[string]interface{}
+	err = json.Unmarshal(byteValue, &jsonconf)
+	if err != nil {
+		fmt.Println(err, "Failed to read config: (%s)")
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
+
+	role := jsonconf["role"].(string)
+	connstr := jsonconf["connlocal"].(string)
+	timeout := 5 * time.Second
+	ipaddr := jsonconf["ipremote"].(string)
+
+	c := controller.NewController(role, connstr, timeout, ipaddr)
+	c.Run()
+	//c.RunSerial()
 }
 
 // func execCommand(command string, port string) (output string) {
