@@ -11,9 +11,9 @@ import (
 
 func main() {
 
-	fmt.Println("Reading configuration file: %s", os.Args[1])
+	fmt.Printf("Reading configuration file: %s\n", os.Args[1])
 
-	jsonFile, err := os.Open("./conf/" + os.Args[1] + ".conf")
+	jsonFile, err := os.Open(os.Args[1] + ".conf")
 	if err != nil {
 		fmt.Println(err, "os.Open>")
 		time.Sleep(100 * time.Millisecond)
@@ -35,14 +35,30 @@ func main() {
 		return
 	}
 
-	role := jsonconf["role"].(string)
-	connstr := jsonconf["connlocal"].(string)
 	timeout := 5 * time.Second
-	ipaddr := jsonconf["ipremote"].(string)
+	lclhost := jsonconf["dblclhost"].(string)
+	lclport := jsonconf["dblclport"].(string)
+	lcluser := jsonconf["dblcluser"].(string)
+	lclpass := jsonconf["dblclpass"].(string)
+	lclname := jsonconf["dblclname"].(string)
 
-	c := controller.NewController(role, connstr, timeout, ipaddr)
+	rmthost := jsonconf["dbrmthost"].(string)
+	rmtport := jsonconf["dbrmtport"].(string)
+
+	vip := jsonconf["vip"].(string)
+
+	connlcl := paramToConn(lclhost, lclport, lcluser, lclpass, lclname)
+
+	c := controller.NewController(timeout, connlcl, rmthost, rmtport, vip)
 	c.Run()
 	//c.RunSerial()
+}
+
+func paramToConn(lclhost string, lclport string, lcluser string, lclpass string, lclname string) string {
+
+	conn := fmt.Sprintf("user=%s password=%s dbname=%s host=%s port=%s sslmode=disable", lcluser, lclpass, lclname, lclhost, lclport)
+
+	return conn
 }
 
 // func execCommand(command string, port string) (output string) {

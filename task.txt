@@ -21,3 +21,41 @@ B. Pada standby, terdapat:
 - dbcheck, dengan fungsi yang sama seperti pada master
 - serial ping, yang mengirimkan ping/req kepada master dan menunggu ack dari master. Jika tidak ada ack, maka akan dilakukan pengiriman ulang hingga beberapa (5kali), dan jika masih tidak bisa maka akan dibuat Flag false
 - port master check, yang mengecek destined port yang digunakan db master, untuk mengetahui apakah menerima connection atau tidak
+
+23 Oktober 2023 - Progress
+- dbCheck akan ping ke db lokal dengan interval 2s
+- serialping akan memulai proses ping dari standby ke master, kemudian mengirimkan ack dari master ke standby. 
+standby mengirimkan ping dengan interval 3s, sleep 3s setelah mengirimkan dan menunggu respon dengan timeout 5s.
+
+
+file conf, dibikin banyak parameter
+{
+    //"role":"master",
+    "dblclhost":"localhost",
+    "dblcluser":"postgres",
+    "dblclpass":"pass",
+    "dblclname":"recordings",
+    "dblclport":"5433",
+    "dbrmthost":"localhost",
+    "dbrmtport":"5434",
+    "vip":"172.31.148.155",
+}
+
+- Traceroute, ttl, ICMP (jangan pakai localhost)
+- check usage of portCheck, apakah akan berat
+- cari tahu akan dapat set V.I.P ke sebuah device tanpa exec cmd terminal. 
+V.I.P adalah ip alias yang awalnya diset ke master, bila ada promote maka vip akan
+pindah ke standby. vip di master akan kosong, dan dipindahkan ke standby yg dipromote
+
+-jika semua ping(serial, icmp, db remote) di standby gagal, maka akan terjadi promote.
+Dan jika db lokal masih ok, promote baru dilakukan dan set vip.
+Pada master ada dbcheck (local) dan netcheck. dbcheck akan periksa ping db lokal dan
+jika terjadi error, maka akan dilakukan restart service. Jika masih error, akan dishutdown
+Pada netcheck, akan dilakukan ping pada gateway yang digunakan dengan timeout, jika ada
+error atau terjadi timeout maka akan dishutdown. Dengan shutdown di master, maka otomatis
+ping dari standby akan gagal semua dan terjadi promote.
+
+Pada standby, ada serial ping(1 s), dbremote ping(10 ms), icmp ping(1 ms) dan dblocal check. Promote
+terjadi jika semua ping gagal. Jika ada salah satu ping gagal, maka dibikin log dan
+tidak ada promote. Urutan : ICMP - DBRemote - Serial
+Retry=5kali
