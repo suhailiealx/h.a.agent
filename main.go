@@ -45,11 +45,12 @@ func main() {
 	rmthost := jsonconf["dbrmthost"].(string)
 	rmtport := jsonconf["dbrmtport"].(string)
 
+	serialname := jsonconf["serialname"].(string)
 	vip := jsonconf["vip"].(string)
 
 	connlcl := paramToConn(lclhost, lclport, lcluser, lclpass, lclname)
 
-	c := controller.NewController(timeout, connlcl, rmthost, rmtport, vip)
+	c := controller.NewController(timeout, connlcl, rmthost, rmtport, serialname, vip)
 	c.Run()
 	//c.RunSerial()
 }

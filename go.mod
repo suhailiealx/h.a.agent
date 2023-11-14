@@ -8,6 +8,12 @@ require (
 	golang.org/x/net v0.17.0
 )
 
-require github.com/creack/goselect v0.1.2 // indirect
+require (
+	github.com/creack/goselect v0.1.2 // indirect
+	github.com/vishvananda/netns v0.0.0-20191106174202-0a2b9b5464df // indirect
+)
 
-require golang.org/x/sys v0.13.0 // indirect
+require (
+	github.com/vishvananda/netlink v1.1.0
+	golang.org/x/sys v0.13.0 // indirect
+)
