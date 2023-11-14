@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
+	"log/syslog"
 	"math/rand"
 	"net"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"trygo/utils"
 
 	_ "github.com/lib/pq"
 	"github.com/vishvananda/netlink"
@@ -43,6 +46,8 @@ var TRUE = true
 var FALSE = false
 var randString = map[int]string{0: "Hello ping", 1: "Hello world", 2: "This is ping", 3: "Knock knock", 4: "Ping is coming"}
 
+var L *utils.Log = utils.L
+
 type Controller struct {
 	Timeout    time.Duration
 	connStrDB  string
@@ -58,6 +63,9 @@ func NewController(timeout time.Duration, connstr string, rmthost string, rmtpor
 }
 
 func (c *Controller) Run() {
+	L.Priority = syslog.LOG_DEBUG
+	L.Stdout = true
+	L.Sysinfo = "H.A. Agent"
 
 	//FLAG_ICMP = &TRUE
 	var wg sync.WaitGroup
@@ -86,7 +94,7 @@ func (c *Controller) Run() {
 	}
 	wg.Wait()
 
-	fmt.Println("Exiting controller...")
+	L.INF("Exiting controller...")
 }
 
 func (c *Controller) waitFlagMaster(wg *sync.WaitGroup) {
@@ -95,14 +103,14 @@ func (c *Controller) waitFlagMaster(wg *sync.WaitGroup) {
 	for {
 		if FLAG_DB_LOCAL == nil && FLAG_NETWORK == nil {
 			//Jika semua flag masih belum bernilai
-			fmt.Println(currentTime() + "Waiting for flags to be ready.....")
+			L.INF("Waiting for flags to be ready.....")
 		} else if FLAG_DB_LOCAL != nil && FLAG_NETWORK != nil {
 			if !*FLAG_DB_LOCAL || !*FLAG_NETWORK {
-				fmt.Println(currentTime() + "Connection error, shutting down device.....")
+				L.INF("Connection error, shutting down device.....")
 				wg.Done()
 				break
 			} else {
-				fmt.Println(currentTime() + "Connection stable, continue monitoring.....")
+				L.INF("Connection stable, continue monitoring.....")
 			}
 		}
 
@@ -116,57 +124,57 @@ func (c *Controller) waitFlagStandby(wg *sync.WaitGroup) {
 	for {
 		if FLAG_ICMP == nil && FLAG_SERIAL == nil && FLAG_PORT_REMOTE == nil {
 			//Jika semua flag masih belum bernilai
-			fmt.Println(currentTime() + "Waiting for flags to be ready.....")
+			L.INF("Waiting for flags to be ready.....")
 		} else if FLAG_ICMP != nil && FLAG_SERIAL != nil && FLAG_PORT_REMOTE != nil {
 			//Jika semua flag telah bernilai
 
 			if *FLAG_PORT_REMOTE && *FLAG_SERIAL && *FLAG_ICMP {
 				//jika port remote ok dan serialping ok
-				fmt.Printf(currentTime()+"FLAG_ICMP: %v | FLAG_DB: %v | FLAG_SERIAL: %v \n", *&FLAG_ICMP, *FLAG_DB_LOCAL, *FLAG_SERIAL)
-				fmt.Println(currentTime() + "Connection is stable, continue monitoring.....")
+				L.DBG("FLAG_ICMP: %v | FLAG_DB: %v | FLAG_SERIAL: %v", *&FLAG_ICMP, *FLAG_DB_LOCAL, *FLAG_SERIAL)
+				L.INF("Connection is stable, continue monitoring.....")
 			} else if !*FLAG_PORT_REMOTE && !*FLAG_SERIAL && !*FLAG_ICMP {
 				//jika port remote false dan serialping false
-				fmt.Println(currentTime() + "Connection error from master, issuing promote.....")
+				L.INF("Connection error from master, issuing promote.....")
 				if *FLAG_DB_LOCAL {
 					//JIka db lokal ok, baru promosi
 					err := c.promoteStandby()
 					if err != nil {
-						fmt.Println("Error promoting, something wrong: ", err)
+						L.ERR(err, "Error promoting, something wrong")
 					} else {
-						fmt.Println("Successfully promoting standby")
+						L.INF("Successfully promoting standby")
 						c.setVIP()
 						FLAG_PING_ERR = &TRUE
 						break
 					}
 				} else {
 					//Jika db lokal error, promosi tidak dapat dilakukan
-					fmt.Println("DB local is error, cannot promote.....")
+					L.INF("DB local is error, cannot promote.....")
 				}
 				break
 			} else {
-				fmt.Println(currentTime() + "Something is wrong!!")
+				L.INF("Something is wrong!!")
 				if !*FLAG_PORT_REMOTE {
-					fmt.Printf(currentTime()+"FLAG_PORT_REMOTE : %v\n", *FLAG_PORT_REMOTE)
+					L.DBG("FLAG_PORT_REMOTE : %v", *FLAG_PORT_REMOTE)
 				}
 				if !*FLAG_SERIAL {
-					fmt.Printf(currentTime()+"FLAG_SERIAL : %v\n", *FLAG_SERIAL)
+					L.DBG("FLAG_SERIAL : %v", *FLAG_SERIAL)
 				}
 				if !*FLAG_ICMP {
-					fmt.Println(currentTime()+"FLAG_ICMP : %v\n", *FLAG_ICMP)
+					L.DBG("FLAG_ICMP : %v", *FLAG_ICMP)
 				}
 			}
 
 		} else {
 			//Memberitahu nilai flag yang sudah ada
-			fmt.Println(currentTime() + "Waiting for results.....")
+			L.INF("Waiting for results.....")
 			if FLAG_ICMP != nil && !*FLAG_ICMP {
-				fmt.Printf(currentTime()+"FLAG_ICMP : %v\n", *FLAG_ICMP)
+				L.DBG("FLAG_ICMP : %v", *FLAG_ICMP)
 			}
 			if FLAG_SERIAL != nil && !*FLAG_SERIAL {
-				fmt.Printf(currentTime()+"FLAG_SERIAL : %v\n", *FLAG_SERIAL)
+				L.DBG("FLAG_SERIAL : %v", *FLAG_SERIAL)
 			}
 			if FLAG_PORT_REMOTE != nil && !*FLAG_PORT_REMOTE {
-				fmt.Printf(currentTime()+"FLAG_PORT_REMOTE : %v\n", *FLAG_PORT_REMOTE)
+				L.DBG("FLAG_PORT_REMOTE : %v", *FLAG_PORT_REMOTE)
 			}
 		}
 		time.Sleep(10 * time.Second)
@@ -178,14 +186,14 @@ func (c *Controller) icmpPing(wg *sync.WaitGroup) {
 
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 	if err != nil {
-		fmt.Println(currentTime()+"Error creating ICMP connection: ", err)
+		L.ERR(err, "Error creating ICMP connection")
 		return
 	}
 	defer conn.Close()
 
 	destAddr, err := net.ResolveIPAddr("ip4", c.HostRemote)
 	if err != nil {
-		fmt.Println(currentTime()+"Error resolving IP address: ", err)
+		L.ERR(err, "Error resolving IP address")
 		return
 	}
 
@@ -201,7 +209,7 @@ func (c *Controller) icmpPing(wg *sync.WaitGroup) {
 
 	msgBytes, err := msg.Marshal(nil)
 	if err != nil {
-		fmt.Println(currentTime()+"Error marshaling ICMP message: ", err)
+		L.ERR(err, "Error marshaling ICMP message")
 		return
 	}
 
@@ -215,7 +223,7 @@ func (c *Controller) icmpPing(wg *sync.WaitGroup) {
 			defer wgX.Done()
 			_, er := conn.WriteTo(msgBytes, destAddr)
 			if er != nil {
-				fmt.Println(currentTime()+"Error sending ICMP packet: ", er)
+				L.ERR(er, "Error sending ICMP packet")
 			}
 		}()
 
@@ -226,13 +234,13 @@ func (c *Controller) icmpPing(wg *sync.WaitGroup) {
 			conn.SetReadDeadline(time.Now().Add(c.Timeout))
 			_, _, err := conn.ReadFrom(reply)
 			if err != nil {
-				fmt.Println(currentTime()+"Error receiving reply: ", err)
+				L.ERR(err, "Error receiving reply")
 				RetryICMP++
 				if RetrySerial <= LIMIT {
-					fmt.Println(currentTime() + "Retrying icmp ping")
+					L.INF("Retrying icmp ping")
 				} else {
 					FLAG_ICMP = &FALSE
-					fmt.Println(currentTime() + "Limit retry reached, error in icmp ping")
+					L.INF("Limit retry reached, error in icmp ping")
 				}
 				// msg, err := icmp.ParseMessage(ipv4.ICMPTypeEcho.Protocol(), reply[:n])
 				// if err == nil {
@@ -266,23 +274,23 @@ func (c *Controller) dbPing(wg *sync.WaitGroup) {
 	for RetryDB <= LIMIT {
 		conn, err := net.DialTimeout("tcp", c.HostRemote+":"+c.PortRemote, c.Timeout)
 		if err != nil {
-			fmt.Println(currentTime()+"dbPing|Error dialing: ", err)
+			L.ERR(err, "Error dialing")
 			RetryDB++
 			if RetryDB <= LIMIT {
-				fmt.Println(currentTime() + "dbPing|Retrying to ping db")
+				L.INF("Retrying to ping db")
 				time.Sleep(1 * time.Second)
 			} else {
 				FLAG_PORT_REMOTE = &FALSE
 			}
 		} else {
+			conn.Close()
 			FLAG_PORT_REMOTE = &TRUE
 			//fmt.Println(currentTime()+"Successfully connected to ", c.HostRemote+":"+c.PortRemote)
 		}
-		conn.Close()
 
 		time.Sleep(20 * time.Millisecond)
 	}
-	fmt.Printf(currentTime()+"Stopping ping db.... returning flag dbping: %v\n", *FLAG_PORT_REMOTE)
+	L.DBG("Stopping ping db.... returning flag dbping: %v", *FLAG_PORT_REMOTE)
 
 	return
 }
@@ -300,7 +308,7 @@ func (c *Controller) serialStandby(serialName string, wg *sync.WaitGroup, mu *sy
 		//fmt.Println("SerialPingStandby|Error connecting serial port: ", err)
 		panic(err)
 	} else {
-		fmt.Println(currentTime()+DB_LOCAL+"|Connect success ", serialName)
+		L.DBG("Connect success ", serialName)
 	}
 
 	defer port.Close()
@@ -316,12 +324,11 @@ func (c *Controller) serialStandby(serialName string, wg *sync.WaitGroup, mu *sy
 		//Standby mengirimkan request/ping ke master
 		_, err = port.Write(dataToSend)
 		if err != nil {
-			fmt.Println("-------------------------------------------")
-			fmt.Println(currentTime()+DB_LOCAL+"|ErrorSerial sending data: ", err)
+			L.ERR(err, "ErrorSerial sending data")
 			RetrySerial++
 			if RetrySerial <= LIMIT {
-				fmt.Println(currentTime() + DB_LOCAL + "|Trying to reconnect......")
-				fmt.Printf(currentTime()+DB_LOCAL+"|Attempting retry %v.....\n", RetrySerial)
+				L.DBG("Trying to reconnect......")
+				L.DBG("Attempting retry %v.....", RetrySerial)
 			}
 		} else {
 			//fmt.Println("standby baca")
@@ -331,21 +338,21 @@ func (c *Controller) serialStandby(serialName string, wg *sync.WaitGroup, mu *sy
 
 			if err == context.DeadlineExceeded {
 				//Jika terjadi timeout, maka akan mengirim ulang ping
-				fmt.Println(currentTime() + DB_LOCAL + "|TimeoutSerial reached while waiting for response......")
+				L.DBG("TimeoutSerial reached while waiting for response......")
 				RetrySerial++
 				if RetrySerial <= LIMIT {
-					fmt.Println(currentTime() + DB_LOCAL + "|Trying to resend ping....")
-					fmt.Printf(currentTime()+DB_LOCAL+"|Attempting retry %v.....\n", RetrySerial)
+					L.DBG("Trying to resend ping....")
+					L.DBG("Attempting retry %v....", RetrySerial)
 				}
 			} else {
 				//Jika ada respon dari master
 				resp := string(buffer[:n])
 				if err != nil || !strings.Contains(resp, "ack") {
-					fmt.Println(currentTime()+DB_LOCAL+"|ErrorSerial receiving data: ", err, resp, n)
+					L.ERR(err, "ErrorSerial receiving data")
 					RetrySerial++
 					if RetrySerial <= LIMIT {
-						fmt.Println(currentTime() + DB_LOCAL + "|Trying to resend the data......")
-						fmt.Printf(currentTime()+DB_LOCAL+"|Attempting retry %v.....\n", RetrySerial)
+						L.DBG("Trying to resend the data......")
+						L.DBG("Attempting retry %v.....", RetrySerial)
 					}
 				} else {
 					//Respons ack berhasil diterima, memberikan true
@@ -366,7 +373,7 @@ func (c *Controller) serialStandby(serialName string, wg *sync.WaitGroup, mu *sy
 	}
 	//Standby akan memberikan false jika telah retry lebih dari 5 kali dan masih error
 	FLAG_SERIAL = &FALSE
-	fmt.Printf(currentTime()+"Stopping Serial ping, returning flag serial: %v\n", *FLAG_SERIAL)
+	L.DBG("Stopping Serial ping, returning flag serial: %v", *FLAG_SERIAL)
 }
 
 func readWithTimeout(port serial.Port, buffer []byte, timeout time.Duration) (int, error) {
@@ -399,7 +406,7 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 
 	port, err := serial.Open(serialName, config)
 	if err != nil {
-		fmt.Println(currentTime()+DB_LOCAL+"|Error connecting serial port: ", err)
+		L.ERR(err, "Error connecting serial port")
 	}
 	defer port.Close()
 	//fmt.Printf("port: %v\n", port)
@@ -413,11 +420,11 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 		//Master akan selalu menunggu request dari standby
 		_, err = port.Read(buffer)
 		if err != nil {
-			fmt.Println(currentTime()+DB_LOCAL+"|ErrorSerial receiving data: ", err)
+			L.ERR(err, "ErrorSerial receiving data")
 			RetrySerial++
 			if RetrySerial <= LIMIT {
-				fmt.Println(currentTime() + DB_LOCAL + "|Waiting data....")
-				fmt.Printf(currentTime()+DB_LOCAL+"|Attempting retry %v.....\n", RetrySerial)
+				L.DBG("Waiting data....")
+				L.DBG("Attempting retry %v.....", RetrySerial)
 			}
 		} else {
 
@@ -431,11 +438,11 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 			//Master mengirimkan respon ack kepada standby sebagai tanda bahwa request telah diterima
 			_, err = port.Write(dataToSend)
 			if err != nil {
-				fmt.Println(currentTime()+DB_LOCAL+"|ErrorSerial sending data: ", err)
+				L.ERR(err, "ErrorSerial sending data")
 				RetrySerial++
 				if RetrySerial <= LIMIT {
-					fmt.Println(currentTime() + DB_LOCAL + "|Resend data....")
-					fmt.Printf(currentTime()+DB_LOCAL+"|Attempting retry %v.....\n", RetrySerial)
+					L.DBG("Resend data....")
+					L.DBG("Attempting retry %v.....", RetrySerial)
 				}
 			} else {
 				RetrySerial = 0
@@ -447,7 +454,7 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 	}
 	//Master akan memberikan false jika dilakukan retry lebih dari 5 kali dan masih error
 	FLAG_SERIAL = &FALSE
-	fmt.Printf(currentTime()+"Stopping ping Serial, returning flag serial: %v\n", *FLAG_SERIAL)
+	L.DBG("Stopping ping Serial, returning flag serial: %v", *FLAG_SERIAL)
 }
 
 // dbType mengecek jenis db lokal apakah replica atau master
@@ -468,7 +475,7 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 
 	//Check if it is master or replica
 	if err != nil {
-		fmt.Println(currentTime()+"dbType|Error executing query: ", err)
+		L.ERR(err, "Error executing query")
 	} else {
 		if res == "true" {
 			DB_LOCAL = "replica"
@@ -480,17 +487,17 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 
 			if err != nil {
 				if err == sql.ErrNoRows {
-					fmt.Println(currentTime()+"dbType|Something is wrong with the replication: ", err)
+					L.ERR(err, "Something is wrong with the replication")
 					REP_STAT = false
 				} else {
-					fmt.Println(currentTime()+"dbType|Error executing query: ", err)
+					L.ERR(err, "Error executing query: ")
 				}
 			} else {
 				REP_STAT = true
 			}
 		}
 
-		fmt.Printf(currentTime()+"dbType|This database is a %s, replication stat: %v\n", DB_LOCAL, REP_STAT)
+		L.DBG("This database is a %s, replication stat: %v", DB_LOCAL, REP_STAT)
 	}
 
 }
@@ -502,10 +509,10 @@ func (c *Controller) dbCheck(driverDB string, wg *sync.WaitGroup) {
 	for (RetryDBLcl <= 1) && ((FLAG_SHUTDOWN == nil) && (FLAG_PING_ERR == nil)) {
 		conn, err := sql.Open(driverDB, c.connStrDB)
 		if err != nil {
-			fmt.Println(currentTime()+"dbCheck|Error connecting to database: ", err)
+			L.ERR(err, "Error connecting to database")
 			RetryDBLcl++
 			if RetryDBLcl <= 1 {
-				fmt.Println(currentTime() + "dbCheck|Trying to restart postgres service")
+				L.DBG("Trying to restart postgres service")
 				restartPostgres()
 			} else {
 				FLAG_DB_LOCAL = &FALSE
@@ -521,10 +528,10 @@ func (c *Controller) dbCheck(driverDB string, wg *sync.WaitGroup) {
 			// 	res = -1
 			// }
 			if err != nil || res != 1 {
-				fmt.Println(currentTime()+"dbCheck|Error querying to database: ", err)
+				L.ERR(err, "Error querying to database")
 				RetryDBLcl++
 				if RetryDBLcl <= 1 {
-					fmt.Println(currentTime() + "dbCheck|Trying to restart postgres service")
+					L.DBG("Trying to restart postgres service")
 					restartPostgres()
 				} else {
 					FLAG_DB_LOCAL = &FALSE
@@ -544,7 +551,7 @@ func (c *Controller) dbCheck(driverDB string, wg *sync.WaitGroup) {
 
 	}
 	FLAG_DB_LOCAL = &FALSE
-	fmt.Printf(currentTime()+"Stopping check localdb.... returning flag db: %v\n", *FLAG_DB_LOCAL)
+	L.DBG("Stopping check localdb.... returning flag db: %v", *FLAG_DB_LOCAL)
 }
 
 func (c *Controller) netCheck(wg *sync.WaitGroup) {
@@ -552,10 +559,10 @@ func (c *Controller) netCheck(wg *sync.WaitGroup) {
 
 	gateway, err := getDefaultGateway()
 	if err != nil {
-		fmt.Println(currentTime()+"Error: ", err)
+		L.ERR(err, "Error")
 	}
 
-	fmt.Println("Default gateway: ", gateway)
+	L.INF("Default gateway: ", gateway)
 
 	// ipAddr, err := net.ResolveIPAddr("ip4", gateway)
 	// if err != nil {
@@ -567,7 +574,7 @@ func (c *Controller) netCheck(wg *sync.WaitGroup) {
 	for FLAG_SHUTDOWN == nil {
 		conn, err := net.DialTimeout("ip4:icmp", gateway, c.Timeout)
 		if err != nil {
-			fmt.Println(currentTime()+"Error connect to gateway: ", err)
+			L.ERR(err, "Error connect to gateway")
 			FLAG_NETWORK = &FALSE
 			FLAG_SHUTDOWN = &TRUE
 			break
@@ -586,12 +593,12 @@ func restartPostgres() {
 
 	err := cmd.Run()
 	if err != nil {
-		fmt.Printf(currentTime()+"~~Error restarting postgresql: %s ~~\n", err)
+		L.ERR(err, "~~Error restarting postgresql~~")
 		return
 
 	}
 
-	fmt.Println(currentTime() + "~~Successfully restarting postgresql~~")
+	L.DBG("~~Successfully restarting postgresql~~")
 
 	return
 }
@@ -599,7 +606,7 @@ func restartPostgres() {
 func (c *Controller) promoteStandby() error {
 	conn, err := sql.Open("postgres", c.connStrDB)
 	if err != nil {
-		fmt.Println("Error connecting to db for promote: ", err)
+		L.ERR(err, "Error connecting to db for promote")
 		return err
 	}
 
@@ -607,7 +614,7 @@ func (c *Controller) promoteStandby() error {
 		query := fmt.Sprint("SELECT pg_promote()")
 		_, err := conn.Exec(query)
 		if err != nil {
-			fmt.Println("Error executing query for promote: ", err)
+			L.ERR(err, "Error executing query for promote")
 			return err
 		}
 	}
@@ -615,30 +622,30 @@ func (c *Controller) promoteStandby() error {
 }
 
 func (c *Controller) setVIP() {
-	ifaceName := "enp0s3"
+	ifaceName := "eth0"
 	netmask := 24
 
 	cidr := fmt.Sprintf("%s/%d", c.vip, netmask)
 	ipNet, err := netlink.ParseIPNet(cidr)
 	if err != nil {
-		fmt.Println("Error parsing ipNet: ", err)
+		L.ERR(err, "Error parsing ipNet")
 		return
 	}
 
 	link, er := netlink.LinkByName(ifaceName)
 	if er != nil {
-		fmt.Println("Error getting network interface: ", err)
+		L.ERR(er, "Error getting network interface")
 		return
 	}
 
 	addr := &netlink.Addr{IPNet: ipNet, Label: ""}
 	err = netlink.AddrAdd(link, addr)
 	if err != nil {
-		fmt.Println("Error adding virtual IP address: ", err)
+		L.ERR(err, "Error adding virtual IP address")
 		return
 	}
 
-	fmt.Printf("Virtual IP %s was added to interface %s \n", c.vip, ifaceName)
+	L.DBG("Virtual IP %s was added to interface %s", c.vip, ifaceName)
 	return
 }
 
@@ -661,10 +668,4 @@ func getDefaultGateway() (string, error) {
 	}
 
 	return strings.TrimSpace(string(output)), err
-}
-
-func currentTime() string {
-	current := time.Now().Format("15:04:05.000000|")
-	return current
-
 }
