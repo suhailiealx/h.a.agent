@@ -8,6 +8,7 @@ import (
 	"log/syslog"
 	"math/rand"
 	"net"
+	"net/smtp"
 	"os"
 	"os/exec"
 	"runtime"
@@ -130,7 +131,7 @@ func (c *Controller) waitFlagStandby(wg *sync.WaitGroup) {
 
 			if *FLAG_PORT_REMOTE && *FLAG_SERIAL && *FLAG_ICMP {
 				//jika port remote ok dan serialping ok
-				L.DBG("FLAG_ICMP: %v | FLAG_DB: %v | FLAG_SERIAL: %v", *&FLAG_ICMP, *FLAG_DB_LOCAL, *FLAG_SERIAL)
+				L.DBG("FLAG_ICMP: %v | FLAG_DB: %v | FLAG_SERIAL: %v", *FLAG_ICMP, *FLAG_DB_LOCAL, *FLAG_SERIAL)
 				L.INF("Connection is stable, continue monitoring.....")
 			} else if !*FLAG_PORT_REMOTE && !*FLAG_SERIAL && !*FLAG_ICMP {
 				//jika port remote false dan serialping false
@@ -144,6 +145,7 @@ func (c *Controller) waitFlagStandby(wg *sync.WaitGroup) {
 						L.INF("Successfully promoting standby")
 						c.setVIP()
 						FLAG_PING_ERR = &TRUE
+						alertToEmail("ALERT", "Successfully promoting standby db", "suhailie20@gmail.com")
 						break
 					}
 				} else {
@@ -292,7 +294,6 @@ func (c *Controller) dbPing(wg *sync.WaitGroup) {
 	}
 	L.DBG("Stopping ping db.... returning flag dbping: %v", *FLAG_PORT_REMOTE)
 
-	return
 }
 
 // serialStandby mengirimkan sebuah req/write ke master dan menunggu ack dari master, bila tidak ada maka akan diulangi hingga jumlah tertentu
@@ -308,7 +309,7 @@ func (c *Controller) serialStandby(serialName string, wg *sync.WaitGroup, mu *sy
 		//fmt.Println("SerialPingStandby|Error connecting serial port: ", err)
 		panic(err)
 	} else {
-		L.DBG("Connect success ", serialName)
+		L.DBG("Connect success %s", serialName)
 	}
 
 	defer port.Close()
@@ -466,9 +467,9 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 	}
 	defer conn.Close()
 
-	queryRep := fmt.Sprint("SELECT usename FROM pg_stat_replication")
+	queryRep := "SELECT usename FROM pg_stat_replication"
 
-	queryType := fmt.Sprint("SELECT pg_is_in_recovery()")
+	queryType := "SELECT pg_is_in_recovery()"
 
 	var res string
 	err = conn.QueryRow(queryType).Scan(&res)
@@ -480,7 +481,6 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 		if res == "true" {
 			DB_LOCAL = "replica"
 		} else if res == "false" {
-			DB_LOCAL = "master"
 
 			// Check if the replication is working in local db master
 			err = conn.QueryRow(queryRep).Scan(&res)
@@ -492,7 +492,9 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 				} else {
 					L.ERR(err, "Error executing query: ")
 				}
+				DB_LOCAL = "undefined"
 			} else {
+				DB_LOCAL = "master"
 				REP_STAT = true
 			}
 		}
@@ -521,7 +523,7 @@ func (c *Controller) dbCheck(driverDB string, wg *sync.WaitGroup) {
 		} else {
 			var res int
 
-			query := fmt.Sprint("SELECT 1")
+			query := "SELECT 1"
 
 			err = conn.QueryRow(query).Scan(&res)
 			// if Count > 9 {
@@ -600,7 +602,6 @@ func restartPostgres() {
 
 	L.DBG("~~Successfully restarting postgresql~~")
 
-	return
 }
 
 func (c *Controller) promoteStandby() error {
@@ -611,7 +612,7 @@ func (c *Controller) promoteStandby() error {
 	}
 
 	if DB_LOCAL == "replica" {
-		query := fmt.Sprint("SELECT pg_promote()")
+		query := "SELECT pg_promote()"
 		_, err := conn.Exec(query)
 		if err != nil {
 			L.ERR(err, "Error executing query for promote")
@@ -646,7 +647,6 @@ func (c *Controller) setVIP() {
 	}
 
 	L.DBG("Virtual IP %s was added to interface %s", c.vip, ifaceName)
-	return
 }
 
 func getDefaultGateway() (string, error) {
@@ -658,7 +658,7 @@ func getDefaultGateway() (string, error) {
 	case "linux":
 		gateway = "/sbin/ip route | /usr/bin/awk '/default/ { print $3 }'"
 	default:
-		return "", fmt.Errorf("Unsupported operating system: %s", runtime.GOOS)
+		return "", fmt.Errorf("unsupported operating system: %s", runtime.GOOS)
 	}
 
 	cmd := exec.Command("sh", "-c", gateway)
@@ -668,4 +668,33 @@ func getDefaultGateway() (string, error) {
 	}
 
 	return strings.TrimSpace(string(output)), err
+}
+
+func alertToEmail(subject string, body string, emailTarget string) {
+	// mail := gomail.NewMessage()
+	// mail.SetHeader("From", "suhailie2401@gmail.com")
+	// mail.SetHeader("To", emailTarget)
+	// mail.SetHeader("Subject", subject)
+	// mail.SetBody("text/plain", body)
+
+	// d := gomail.NewDialer("smtp.gmail.com", 587, "suhailie2401@gmail.com", "alxi25@-")
+	// d.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+
+	// if err := d.DialAndSend(mail); err != nil {
+	// 	L.ERR(err, "Error sending alert")
+	// 	panic(err)
+	// }
+
+	from := "suhailie20@gmail.com"
+	password := "isorslwhaskfuodj "
+	to := emailTarget
+
+	msg := "Subject: " + subject + "\r\n" + body
+
+	auth := smtp.PlainAuth("", from, password, "smtp.gmail.com")
+
+	err := smtp.SendMail("smtp.gmail.com:587", auth, from, []string{to}, []byte(msg))
+	if err != nil {
+		L.ERR(err, "Error sending alert")
+	}
 }
