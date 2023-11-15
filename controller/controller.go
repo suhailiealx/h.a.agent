@@ -55,12 +55,13 @@ type Controller struct {
 	HostRemote string
 	PortRemote string
 	serialName string
+	gateway    string
 	vip        string
 }
 
-func NewController(timeout time.Duration, connstr string, rmthost string, rmtport string, serialname string, vip string) *Controller {
+func NewController(timeout time.Duration, connstr string, rmthost string, rmtport string, serialname string, gateway string, vip string) *Controller {
 
-	return &Controller{timeout, connstr, rmthost, rmtport, serialname, vip}
+	return &Controller{timeout, connstr, rmthost, rmtport, serialname, gateway, vip}
 }
 
 func (c *Controller) Run() {
