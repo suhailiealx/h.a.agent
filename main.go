@@ -4,26 +4,40 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log/syslog"
 	"os"
 	"time"
 
 	"h.a.agent/controller"
+	"h.a.agent/utils"
 )
 
+var L *utils.Log = utils.L
+
 func main() {
+	L.Priority = syslog.LOG_DEBUG
+	L.Stdout = true
+	L.Sysinfo = "H.A. Agent"
+
+	if len(os.Args) < 2 {
+		var err error
+		L.ERR(err, "Usage ./main [config file]")
+		time.Sleep(100 * time.Millisecond)
+		return
+	}
 
 	fmt.Printf("Reading properties file: %s\n", os.Args[1])
 
 	jsonFile, err := os.Open(os.Args[1] + ".properties")
 	if err != nil {
-		fmt.Println(err, "os.Open>")
+		L.ERR(err, "os.Open>")
 		time.Sleep(100 * time.Millisecond)
 		return
 	}
 
 	byteValue, err := ioutil.ReadAll(jsonFile)
 	if err != nil {
-		fmt.Println(err, "Failed to read config: (%s)")
+		L.ERR(err, "Failed to read config: (%s)")
 		time.Sleep(100 * time.Millisecond)
 		return
 	}
@@ -31,7 +45,7 @@ func main() {
 	var jsonconf map[string]interface{}
 	err = json.Unmarshal(byteValue, &jsonconf)
 	if err != nil {
-		fmt.Println(err, "Failed to read config: (%s)")
+		L.ERR(err, "Failed to read config: (%s)")
 		time.Sleep(100 * time.Millisecond)
 		return
 	}

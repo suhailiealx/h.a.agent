@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"flag"
 	"fmt"
-	"log/syslog"
 	"math/rand"
 	"net"
 	"net/smtp"
@@ -16,13 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"h.a.agent/utils"
-
 	_ "github.com/lib/pq"
 	"github.com/vishvananda/netlink"
 	"go.bug.st/serial"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"h.a.agent/utils"
 )
 
 const LIMIT = 5
@@ -67,9 +65,6 @@ func NewController(timeout time.Duration, connstr string, rmthost string, rmtpor
 }
 
 func (c *Controller) Run() {
-	L.Priority = syslog.LOG_DEBUG
-	L.Stdout = true
-	L.Sysinfo = "H.A. Agent"
 
 	//FLAG_ICMP = &TRUE
 	var wg sync.WaitGroup
@@ -82,7 +77,7 @@ func (c *Controller) Run() {
 
 	wg.Add(1)
 	go c.dbType("postgres", &wg)
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 	if DB_LOCAL == "master" {
 		c.setVIP()
 		wg.Add(4)
@@ -576,7 +571,7 @@ func (c *Controller) netCheck(wg *sync.WaitGroup) {
 		L.ERR(err, "Error")
 	}
 
-	L.INF("Default gateway: ", gateway)
+	L.DBG("Default gateway: %s", gateway)
 
 	// ipAddr, err := net.ResolveIPAddr("ip4", gateway)
 	// if err != nil {
@@ -635,8 +630,13 @@ func (c *Controller) promoteStandby() error {
 }
 
 func (c *Controller) setVIP() {
-	ifaceName := "eth0"
 	netmask := 24
+	ifaceName := getInterfaceNetworkbyIP(c.vip)
+	if ifaceName == "" {
+		var err error
+		L.ERR(err, "No related segment IP of VIP")
+		return
+	}
 
 	cidr := fmt.Sprintf("%s/%d", c.vip, netmask)
 	ipNet, err := netlink.ParseIPNet(cidr)
@@ -709,4 +709,30 @@ func alertToEmail(subject string, body string, emailTarget string, mailServer st
 	if err != nil {
 		L.ERR(err, "Error sending alert")
 	}
+}
+
+func getInterfaceNetworkbyIP(vip string) string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		L.ERR(err, "Failed to list network interfaces")
+	}
+
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			L.ERR(err, "Failed to get addresses of interfaces")
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ipNet.Contains(net.ParseIP(vip)) {
+				return iface.Name
+			}
+		}
+	}
+
+	return ""
 }
