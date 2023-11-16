@@ -6,7 +6,8 @@ import (
 	"io/ioutil"
 	"os"
 	"time"
-	"trygo/controller"
+
+	"h.a.agent/controller"
 )
 
 func main() {
