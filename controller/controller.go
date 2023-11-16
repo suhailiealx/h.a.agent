@@ -56,12 +56,14 @@ type Controller struct {
 	PortRemote string
 	serialName string
 	gateway    string
+	email      string
+	mailServer string
 	vip        string
 }
 
-func NewController(timeout time.Duration, connstr string, rmthost string, rmtport string, serialname string, gateway string, vip string) *Controller {
+func NewController(timeout time.Duration, connstr string, rmthost string, rmtport string, serialname string, gateway string, email string, mailServer string, vip string) *Controller {
 
-	return &Controller{timeout, connstr, rmthost, rmtport, serialname, gateway, vip}
+	return &Controller{timeout, connstr, rmthost, rmtport, serialname, gateway, email, mailServer, vip}
 }
 
 func (c *Controller) Run() {
@@ -78,7 +80,9 @@ func (c *Controller) Run() {
 	// connMaster := "user=postgres password=postgres dbname=recordings host=localhost port=5434 sslmode=disable"
 	// connStandby := "user=postgres password=postgres dbname=recordings host=localhost port=5433 sslmode=disable"
 
-	c.dbType("postgres", &wg)
+	wg.Add(1)
+	go c.dbType("postgres", &wg)
+	time.Sleep(2 * time.Second)
 	if DB_LOCAL == "master" {
 		c.setVIP()
 		wg.Add(4)
@@ -146,7 +150,7 @@ func (c *Controller) waitFlagStandby(wg *sync.WaitGroup) {
 						L.INF("Successfully promoting standby")
 						c.setVIP()
 						FLAG_PING_ERR = &TRUE
-						alertToEmail("ALERT", "Successfully promoting standby db", "suhailie20@gmail.com")
+						alertToEmail("ALERT", "Successfully promoting standby db", c.email, c.mailServer)
 						break
 					}
 				} else {
@@ -461,6 +465,7 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 
 // dbType mengecek jenis db lokal apakah replica atau master
 func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
+	defer wg.Done()
 
 	conn, err := sql.Open(dbDriver, c.connStrDB)
 	if err != nil {
@@ -473,34 +478,40 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 	queryType := "SELECT pg_is_in_recovery()"
 
 	var res string
-	err = conn.QueryRow(queryType).Scan(&res)
 
-	//Check if it is master or replica
-	if err != nil {
-		L.ERR(err, "Error executing query")
-	} else {
-		if res == "true" {
-			DB_LOCAL = "replica"
-		} else if res == "false" {
+	for (FLAG_SHUTDOWN == nil) || (FLAG_PING_ERR == nil) {
+		err = conn.QueryRow(queryType).Scan(&res)
 
-			// Check if the replication is working in local db master
-			err = conn.QueryRow(queryRep).Scan(&res)
+		//Check if it is master or replica
+		if err != nil {
+			L.ERR(err, "Error executing query")
+		} else {
+			if res == "true" {
+				DB_LOCAL = "replica"
+			} else if res == "false" {
 
-			if err != nil {
-				if err == sql.ErrNoRows {
-					L.ERR(err, "Something is wrong with the replication")
-					REP_STAT = false
+				// Check if the replication is working in local db master
+				err = conn.QueryRow(queryRep).Scan(&res)
+
+				if err != nil {
+					if err == sql.ErrNoRows {
+						L.ERR(err, "Something is wrong with the replication")
+						alertToEmail("Alert", "Replication is down", c.email, c.mailServer)
+						REP_STAT = false
+						break
+					} else {
+						L.ERR(err, "Error executing query: ")
+					}
+					DB_LOCAL = "undefined"
 				} else {
-					L.ERR(err, "Error executing query: ")
+					DB_LOCAL = "master"
+					REP_STAT = true
 				}
-				DB_LOCAL = "undefined"
-			} else {
-				DB_LOCAL = "master"
-				REP_STAT = true
 			}
-		}
 
-		L.DBG("This database is a %s, replication stat: %v", DB_LOCAL, REP_STAT)
+			L.DBG("This database is a %s, replication stat: %v", DB_LOCAL, REP_STAT)
+			time.Sleep(10 * time.Second)
+		}
 	}
 
 }
@@ -671,7 +682,7 @@ func getDefaultGateway() (string, error) {
 	return strings.TrimSpace(string(output)), err
 }
 
-func alertToEmail(subject string, body string, emailTarget string) {
+func alertToEmail(subject string, body string, emailTarget string, mailServer string) {
 	// mail := gomail.NewMessage()
 	// mail.SetHeader("From", "suhailie2401@gmail.com")
 	// mail.SetHeader("To", emailTarget)
@@ -692,7 +703,7 @@ func alertToEmail(subject string, body string, emailTarget string) {
 
 	msg := "Subject: " + subject + "\r\n" + body
 
-	auth := smtp.PlainAuth("", from, password, "smtp.gmail.com")
+	auth := smtp.PlainAuth("", from, password, mailServer)
 
 	err := smtp.SendMail("smtp.gmail.com:587", auth, from, []string{to}, []byte(msg))
 	if err != nil {
