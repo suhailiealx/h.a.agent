@@ -31,13 +31,16 @@ var RetryICMP int
 var RetryDBLcl int
 var Count int
 
-var FLAG_NETWORK *bool
-var FLAG_DB_LOCAL *bool
-var FLAG_SERIAL *bool
-var FLAG_PORT_REMOTE *bool
-var FLAG_ICMP *bool
+var FLAG_NETWORK *bool  //Flag untuk network check dari instance master
+var FLAG_DB_LOCAL *bool //Flag untuk db local check dari instance master
+
+var FLAG_ICMP *bool        //Flag untuk icmp ping dari instance standby
+var FLAG_SERIAL *bool      //Flag untuk serial ping dari instance standby
+var FLAG_PORT_REMOTE *bool //Flag untuk db ping dari instance standby
+
 var DB_LOCAL string
 var REP_STAT bool
+
 var FLAG_SHUTDOWN *bool
 var FLAG_PING_ERR *bool
 
@@ -71,9 +74,6 @@ func (c *Controller) Run() {
 	var mu sync.Mutex
 
 	rand.Seed(time.Now().UnixNano())
-
-	// connMaster := "user=postgres password=postgres dbname=recordings host=localhost port=5434 sslmode=disable"
-	// connStandby := "user=postgres password=postgres dbname=recordings host=localhost port=5433 sslmode=disable"
 
 	wg.Add(1)
 	go c.dbType("postgres", &wg)
@@ -146,8 +146,8 @@ func (c *Controller) waitFlagStandby(wg *sync.WaitGroup) {
 						c.setVIP()
 						FLAG_PING_ERR = &TRUE
 						alertToEmail("ALERT", "Successfully promoting standby db", c.email, c.mailServer)
-						break
 					}
+					break
 				} else {
 					//Jika db lokal error, promosi tidak dapat dilakukan
 					L.INF("DB local is error, cannot promote.....")
@@ -414,7 +414,7 @@ func (c *Controller) serialMaster(serialName string, wg *sync.WaitGroup, mu *syn
 
 	// var n int
 	buffer := make([]byte, 100)
-	for RetrySerial <= LIMIT {
+	for (RetrySerial <= LIMIT) && (FLAG_SHUTDOWN == nil) {
 		//Alur loop di master : nunggu req - terima req - kirim ack - nunggu req.....
 
 		// fmt.Println("master baca")
@@ -480,6 +480,7 @@ func (c *Controller) dbType(dbDriver string, wg *sync.WaitGroup) {
 		//Check if it is master or replica
 		if err != nil {
 			L.ERR(err, "Error executing query")
+			break
 		} else {
 			if res == "true" {
 				DB_LOCAL = "replica"
@@ -735,4 +736,38 @@ func getInterfaceNetworkbyIP(vip string) string {
 	}
 
 	return ""
+}
+
+func unixSocket() {
+	socket, err := net.Listen("unix", "/tmp/echo.sock")
+	if err != nil {
+		L.ERR(err, "Failed to create unix socket")
+		return
+	}
+
+	for {
+		conn, err := socket.Accept()
+		if err != nil {
+			L.ERR(err, "Failed to accept incoming connection")
+			return
+		}
+
+		go func(conn net.Conn) {
+			defer conn.Close()
+
+			buff := make([]byte, 1024)
+
+			n, err := conn.Read(buff)
+			if err != nil {
+				L.ERR(err, "Error reading incoming data")
+				return
+			}
+
+			_, err = conn.Write(buff[:n])
+			if err != nil {
+				L.ERR(err, "Error writing data")
+				return
+			}
+		}(conn)
+	}
 }
